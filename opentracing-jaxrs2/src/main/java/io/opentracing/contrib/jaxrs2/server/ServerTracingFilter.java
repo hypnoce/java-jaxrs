@@ -8,6 +8,7 @@ import io.opentracing.contrib.jaxrs2.internal.CastUtils;
 import io.opentracing.contrib.jaxrs2.internal.SpanWrapper;
 import io.opentracing.propagation.Format;
 import io.opentracing.tag.Tags;
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -61,8 +62,11 @@ public class ServerTracingFilter implements ContainerRequestFilter, ContainerRes
             }
 
             Span span = spanBuilder.startManual();
+            final ActiveSpan activeSpan;
             if (isSyncRequest) {
-                tracer.makeActive(span);
+                activeSpan = tracer.makeActive(span);
+            } else {
+                activeSpan = null;
             }
 
             if (spanDecorators != null) {
@@ -80,7 +84,18 @@ public class ServerTracingFilter implements ContainerRequestFilter, ContainerRes
                 log.finest("Creating server span: " + operationName);
             }
 
-            requestContext.setProperty(SPAN_PROP_ID, new SpanWrapper(span));
+            final SpanWrapper spanWrapper;
+            if(activeSpan == null) {
+                spanWrapper = new SpanWrapper(span);
+            }  else {
+                spanWrapper = new SpanWrapper(span, new Closeable() {
+                    @Override
+                    public void close() throws IOException {
+                        activeSpan.deactivate();
+                    }
+                });
+            }
+            requestContext.setProperty(SPAN_PROP_ID, spanWrapper);
         }
     }
 
@@ -99,12 +114,7 @@ public class ServerTracingFilter implements ContainerRequestFilter, ContainerRes
             }
         }
 
-        ActiveSpan activeSpan = tracer.activeSpan();
-        if (activeSpan != null) {
-            activeSpan.deactivate();
-        } else {
-            spanWrapper.finish();
-        }
+        spanWrapper.finish();
     }
 
 }
